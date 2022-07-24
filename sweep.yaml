@@ -1,0 +1,22 @@
+program: train.py
+method: bayes
+metric:
+  goal: minimize
+  name: val_loss
+parameters:
+  learning_rate:
+    max: 0.00002
+    min: 0.0000001
+    distribution: uniform
+  arch:
+    values:
+      - bert_L-2_H-128_A-2
+      - bert_L-12_H-768_A-12
+      - bert_L-8_H-512_A-8
+      - bert_L-4_H-768_A-12
+      - albert_en_large
+      - electra_large
+      - roberta_L-12_H-768_A-12
+    distribution: categorical
+  bs:
+    values: [32,64,128]
