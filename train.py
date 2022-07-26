@@ -7,9 +7,6 @@ from ml_collections import config_dict
 import argparse
 import tensorflow_hub as hub
 from official.nlp import optimization 
-# import torch
-# from numba import cuda
-# from GPUtil import showUtilization as gpu_usage
 import os
 import gc
 
@@ -19,13 +16,14 @@ default_cfg.bs = 32
 default_cfg.seed = 42
 default_cfg.preprocessor = 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/3'
 default_cfg.encoder = 'https://tfhub.dev/tensorflow/small_bert/bert_en_uncased_L-2_H-128_A-2/2'
-default_cfg.arch = 'roberta_L-12_H-768_A-12'
+default_cfg.arch = 'bert_L-8_H-512_A-8'
 default_cfg.learning_rate = 3e-5
 default_cfg.PROJECT_NAME = "banking_77"
 default_cfg.JOB_TYPE = "hyperparameter_optimize"
 default_cfg.ENTITY = "basha"
 default_cfg.SPLIT_DATA = "preprocess"
-default_cfg.epochs = 5
+default_cfg.epochs = 10
+default_cfg.savemodel = True
 
 model_dict = {
     "bert_L-2_H-128_A-2": ["https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/3" , "https://tfhub.dev/tensorflow/small_bert/bert_en_uncased_L-2_H-128_A-2/2"],
@@ -51,6 +49,7 @@ def parse_args():
     argparser.add_argument('--epochs', type=int, default=default_cfg.epochs, help='number of training epochs')
     argparser.add_argument('--learning_rate', type=float, default=default_cfg.learning_rate, help='learning rate')
     argparser.add_argument('--arch', type=str, default=default_cfg.arch, help='BERT type architecture')
+    argparser.add_argument('--savemodel', type=bool, default=default_cfg.savemodel, help='Save model in W&B')
     return argparser.parse_args()
 
 # def free_gpu_cache():
@@ -80,9 +79,9 @@ def prepare_data(processed_data_at):
 def load_data(train,valid,test,batchsize):
     AUTOTUNE = tf.data.AUTOTUNE
 
-    train_ds = tf.data.Dataset.from_tensor_slices((train['text'],train['label'])).batch(batchsize).cache().prefetch(buffer_size=AUTOTUNE)
-    valid_ds = tf.data.Dataset.from_tensor_slices((valid['text'],valid['label'])).batch(batchsize).cache().prefetch(buffer_size=AUTOTUNE)
-    test_ds = tf.data.Dataset.from_tensor_slices((test['text'],test['label'])).batch(batchsize).cache().prefetch(buffer_size=AUTOTUNE)
+    train_ds = tf.data.Dataset.from_tensor_slices((train['text'],train['label'])).batch(batchsize).prefetch(buffer_size=AUTOTUNE)
+    valid_ds = tf.data.Dataset.from_tensor_slices((valid['text'],valid['label'])).batch(batchsize).prefetch(buffer_size=AUTOTUNE)
+    test_ds = tf.data.Dataset.from_tensor_slices((test['text'],test['label'])).batch(batchsize).prefetch(buffer_size=AUTOTUNE)
 
     return train_ds,valid_ds,test_ds
 
@@ -120,24 +119,25 @@ def build_train(cfg):
                                           num_train_steps=num_train_steps,
                                           num_warmup_steps=num_warmup_steps,
                                           optimizer_type='adamw')
+        gc.collect()
 
         model = make_model(cfg)
         model.compile(optimizer=optimizer,
                          loss=tf.keras.losses.SparseCategoricalCrossentropy(),
                          metrics=['accuracy'])
 
-
-        model.fit(train_ds,validation_data=valid_ds,epochs=cfg.epochs,callbacks=[WandbCallback(save_model=True)])
-
+        # free_gpu_cache() 
+        model.fit(train_ds,validation_data=valid_ds,epochs=cfg.epochs,callbacks=[WandbCallback(save_model=False)])
+        
         loss , acccuracy = model.evaluate(test_ds)
+        if cfg.savemodel:
+            model.save(os.path.join(wandb.run.dir, "model-best.h5"))
 
         wandb.log({'test_loss': loss ,"test_accuracy": acccuracy})
 
 if __name__ == "__main__":
-    # os.environ['TF_GPU_ALLOCATOR']='cuda_malloc_async'
     # free_gpu_cache() 
     default_cfg.update(vars(parse_args()))
-    # print(type(default_cfg))
     build_train(default_cfg)
 
 
