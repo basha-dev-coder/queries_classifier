@@ -7,11 +7,11 @@ from ml_collections import config_dict
 import argparse
 import tensorflow_hub as hub
 from official.nlp import optimization 
-# import torch
-# from numba import cuda
-# from GPUtil import showUtilization as gpu_usage
+import torch
+from numba import cuda
+from GPUtil import showUtilization as gpu_usage
 import os
-import gc
+# https://www.kaggle.com/getting-started/140636
 
 default_cfg = config_dict.ConfigDict()
 
@@ -37,12 +37,29 @@ model_dict = {
     "roberta_L-12_H-768_A-12": ["https://tfhub.dev/jeongukjae/roberta_en_cased_preprocess/1" , "https://tfhub.dev/jeongukjae/roberta_en_cased_L-12_H-768_A-12/1"]
 }
 
+
+
+def free_gpu_cache():
+    print("Initial GPU Usage")
+    gpu_usage()                             
+    torch.cuda.empty_cache()
+
+    cuda.select_device(0)
+    cuda.close()
+    cuda.select_device(0)
+    
+    print("GPU Usage after emptying the cache")
+    gpu_usage()
+
+free_gpu_cache() 
+
 def set_model_url(model_name):
    return model_dict[model_name][0] , model_dict[model_name][1]
 
 
 # optional
 def parse_args():
+    
     default_cfg.preprocessor , default_cfg.encoder = set_model_url(default_cfg.arch)
     "Overriding default argments"
     argparser = argparse.ArgumentParser(description='Process hyper-parameters')
@@ -53,27 +70,17 @@ def parse_args():
     argparser.add_argument('--arch', type=str, default=default_cfg.arch, help='BERT type architecture')
     return argparser.parse_args()
 
-# def free_gpu_cache():
-#     print("Initial GPU Usage")
-#     gpu_usage()                             
-#     torch.cuda.empty_cache()
 
-#     cuda.select_device(0)
-#     cuda.close()
-#     cuda.select_device(0)
-    
-#     print("GPU Usage after emptying the cache")
-#     gpu_usage()
 
 
 def prepare_data(processed_data_at):
 
-    split = wandb.use_artifact(f'{processed_data_at}:latest')
-    split_dir = split.download()
+    # split = wandb.use_artifact(f'{processed_data_at}:latest')
+    # split_dir = split.download()
 
-    train_df = pd.read_csv(f'{split_dir}//train_split.csv')
-    valid_df = pd.read_csv(f'{split_dir}//valid_split.csv')
-    test_df = pd.read_csv(f'{split_dir}//test_split.csv')
+    train_df = pd.read_csv(f'{processed_data_at}//train_split.csv')
+    valid_df = pd.read_csv(f'{processed_data_at}//valid_split.csv')
+    test_df = pd.read_csv(f'{processed_data_at}//test_split.csv')
 
     return train_df,valid_df,test_df
 
@@ -100,44 +107,43 @@ def make_model(config):
     net = tf.keras.layers.Dense(77,activation='softmax',name="classifier")(pooled_output) #predict 77 classes
     return tf.keras.Model(text_input, net)
 
-
 def build_train(cfg):
-    with  wandb.init(project=cfg.PROJECT_NAME,job_type=cfg.JOB_TYPE,entity=cfg.ENTITY,config=cfg):
-        train_df, valid_df, test_df = prepare_data(cfg.SPLIT_DATA)
-        train_ds, valid_ds, test_ds = load_data(train_df,valid_df,test_df,cfg.bs)
 
-        del train_df, valid_df, test_df
+    
+    # with  wandb.init(project=cfg.PROJECT_NAME,job_type=cfg.JOB_TYPE,entity=cfg.ENTITY,config=cfg):
+    train_df, valid_df, test_df = prepare_data(".//artifacts//preprocess-v0")
+    train_ds, valid_ds, test_ds = load_data(train_df,valid_df,test_df,cfg.bs)
 
-        steps_per_epoch = tf.data.experimental.cardinality(train_ds).numpy()
-        num_train_steps = steps_per_epoch * cfg.epochs
-        num_warmup_steps = int(0.1*num_train_steps)
+    del train_df, valid_df, test_df
 
-        gc.collect()
+    steps_per_epoch = tf.data.experimental.cardinality(train_ds).numpy()
+    num_train_steps = steps_per_epoch * cfg.epochs
+    num_warmup_steps = int(0.1*num_train_steps)
 
-        # print(f'steps_per_epoch=={steps_per_epoch} , num_train_steps=={num_train_steps} , num_warmup_steps=={num_warmup_steps}')
-        init_lr = cfg.learning_rate
-        optimizer = optimization.create_optimizer(init_lr=init_lr,
+    print(f'steps_per_epoch=={steps_per_epoch} , num_train_steps=={num_train_steps} , num_warmup_steps=={num_warmup_steps}')
+    model = make_model(cfg)
+    init_lr = cfg.learning_rate
+    optimizer = optimization.create_optimizer(init_lr=init_lr,
                                           num_train_steps=num_train_steps,
                                           num_warmup_steps=num_warmup_steps,
                                           optimizer_type='adamw')
-
-        model = make_model(cfg)
-        model.compile(optimizer=optimizer,
+        
+    model.compile(optimizer=optimizer,
                          loss=tf.keras.losses.SparseCategoricalCrossentropy(),
                          metrics=['accuracy'])
 
 
-        model.fit(train_ds,validation_data=valid_ds,epochs=cfg.epochs,callbacks=[WandbCallback(save_model=True)])
+    # model.fit(train_ds,validation_data=valid_ds,epochs=cfg.epochs,callbacks=[WandbCallback(save_model=False)])
+    model.fit(train_ds,validation_data=valid_ds,epochs=cfg.epochs)
 
-        loss , acccuracy = model.evaluate(test_ds)
+    loss , acccuracy = model.evaluate(test_ds)
 
-        wandb.log({'test_loss': loss ,"test_accuracy": acccuracy})
+    print({'test_loss': loss ,"test_accuracy": acccuracy})
 
 if __name__ == "__main__":
-    # os.environ['TF_GPU_ALLOCATOR']='cuda_malloc_async'
-    # free_gpu_cache() 
+    os.environ['TF_GPU_ALLOCATOR']='cuda_malloc_async'
     default_cfg.update(vars(parse_args()))
-    # print(type(default_cfg))
+    free_gpu_cache()
     build_train(default_cfg)
 
 
