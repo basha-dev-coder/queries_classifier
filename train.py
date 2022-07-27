@@ -20,10 +20,10 @@ default_cfg.encoder = 'https://tfhub.dev/tensorflow/small_bert/bert_en_uncased_L
 default_cfg.arch = 'bert_L-8_H-512_A-8'
 default_cfg.learning_rate = 2e-5
 default_cfg.PROJECT_NAME = "banking_77"
-default_cfg.JOB_TYPE = "hyperparameter_optimize"
+default_cfg.JOB_TYPE = "Training"
 default_cfg.ENTITY = "basha"
 default_cfg.SPLIT_DATA = "preprocess"
-default_cfg.epochs = 1
+default_cfg.epochs = 10
 default_cfg.savemodel = True
 
 model_dict = {
@@ -52,19 +52,6 @@ def parse_args():
     argparser.add_argument('--arch', type=str, default=default_cfg.arch, help='BERT type architecture')
     argparser.add_argument('--savemodel', type=bool, default=default_cfg.savemodel, help='Save model in W&B')
     return argparser.parse_args()
-
-# def free_gpu_cache():
-#     print("Initial GPU Usage")
-#     gpu_usage()                             
-#     torch.cuda.empty_cache()
-
-#     cuda.select_device(0)
-#     cuda.close()
-#     cuda.select_device(0)
-    
-#     print("GPU Usage after emptying the cache")
-#     gpu_usage()
-
 
 def prepare_data(processed_data_at):
 
@@ -133,13 +120,13 @@ def build_train(cfg):
         loss, acccuracy = model.evaluate(test_ds)
         
         if cfg.savemodel:        
-            preds = model.predict(test_ds)         
-            wandb.log({'prediction_table',wandb.Table(dataframe=predictions_table(preds,test_df))})
-            wandb.log({'clasification_report',wandb.Table(dataframe=predictions_table(preds,test_df['label']))})
+            preds = model.predict(test_ds) 
+            wandb.run.log({'prediction_table': wandb.Table(dataframe=predictions_table(preds,test_df))})
+            wandb.run.log({'clasification_report': wandb.Table(dataframe=cls_report(test_df,preds))})
 
-            model.save(os.path.join(wandb.run.dir, "model.h5"),include_optimizer=False)
-            artifact = wandb.Artifact('banking_77_model',type='model')
-            artifact.add_file(os.path.join(wandb.run.dir, "model.h5"),"model.h5")
+            model.save(os.path.join("models", "model.h5"),include_optimizer=False)
+            artifact = wandb.Artifact(f'{cfg.arch}',type='model')
+            artifact.add_file(os.path.join("models", "model.h5"),"model.h5")
             wandb.log_artifact(artifact)
 
         wandb.log({'test_loss': loss ,"test_accuracy": acccuracy})
@@ -151,15 +138,14 @@ def predictions_table(preds,testset):
 
     return testset
 
-def classification_report(target,preds):
-    cls = classification_report(target, tf.argmax(preds,1),output_dict=True)
+def cls_report(target,preds):
+    cls = classification_report(target['label'], tf.argmax(preds,1),output_dict=True)
     df = pd.DataFrame(cls).transpose()
     return df[:77]  # removing last 3 rows accuracy, macro avg, weighted avg
     
 
 
 if __name__ == "__main__":
-    # free_gpu_cache() 
     default_cfg.update(vars(parse_args()))
     build_train(default_cfg)
 
