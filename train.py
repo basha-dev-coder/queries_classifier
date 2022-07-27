@@ -9,6 +9,7 @@ import tensorflow_hub as hub
 from official.nlp import optimization 
 import os
 import gc
+from sklearn.metrics import classification_report
 
 default_cfg = config_dict.ConfigDict()
 
@@ -17,12 +18,12 @@ default_cfg.seed = 42
 default_cfg.preprocessor = 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/3'
 default_cfg.encoder = 'https://tfhub.dev/tensorflow/small_bert/bert_en_uncased_L-2_H-128_A-2/2'
 default_cfg.arch = 'bert_L-8_H-512_A-8'
-default_cfg.learning_rate = 3e-5
+default_cfg.learning_rate = 2e-5
 default_cfg.PROJECT_NAME = "banking_77"
 default_cfg.JOB_TYPE = "hyperparameter_optimize"
 default_cfg.ENTITY = "basha"
 default_cfg.SPLIT_DATA = "preprocess"
-default_cfg.epochs = 10
+default_cfg.epochs = 1
 default_cfg.savemodel = True
 
 model_dict = {
@@ -105,7 +106,7 @@ def build_train(cfg):
         train_df, valid_df, test_df = prepare_data(cfg.SPLIT_DATA)
         train_ds, valid_ds, test_ds = load_data(train_df,valid_df,test_df,cfg.bs)
 
-        del train_df, valid_df, test_df
+        del train_df, valid_df
 
         steps_per_epoch = tf.data.experimental.cardinality(train_ds).numpy()
         num_train_steps = steps_per_epoch * cfg.epochs
@@ -129,11 +130,33 @@ def build_train(cfg):
         # free_gpu_cache() 
         model.fit(train_ds,validation_data=valid_ds,epochs=cfg.epochs,callbacks=[WandbCallback(save_model=False)])
         
-        loss , acccuracy = model.evaluate(test_ds)
-        if cfg.savemodel:
-            model.save(os.path.join(wandb.run.dir, "model-best.h5"))
+        loss, acccuracy = model.evaluate(test_ds)
+        
+        if cfg.savemodel:        
+            preds = model.predict(test_ds)         
+            wandb.log({'prediction_table',wandb.Table(dataframe=predictions_table(preds,test_df))})
+            wandb.log({'clasification_report',wandb.Table(dataframe=predictions_table(preds,test_df['label']))})
+
+            model.save(os.path.join(wandb.run.dir, "model.h5"),include_optimizer=False)
+            artifact = wandb.Artifact('banking_77_model',type='model')
+            artifact.add_file(os.path.join(wandb.run.dir, "model.h5"),"model.h5")
+            wandb.log_artifact(artifact)
 
         wandb.log({'test_loss': loss ,"test_accuracy": acccuracy})
+
+def predictions_table(preds,testset):
+    testset['label_prob'] = [x[testset.loc[index,'label']] for index,x in enumerate(preds)]
+    testset['target_prob'] = tf.reduce_max(preds,1)
+    testset['target_class'] = tf.argmax(preds,1)
+
+    return testset
+
+def classification_report(target,preds):
+    cls = classification_report(target, tf.argmax(preds,1),output_dict=True)
+    df = pd.DataFrame(cls).transpose()
+    return df[:77]  # removing last 3 rows accuracy, macro avg, weighted avg
+    
+
 
 if __name__ == "__main__":
     # free_gpu_cache() 
