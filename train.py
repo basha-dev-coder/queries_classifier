@@ -37,11 +37,25 @@ model_dict = {
 }
 
 def set_model_url(model_name):
-   return model_dict[model_name][0] , model_dict[model_name][1]
+    """ To set the trained preprocessor and encoder model URL by arch type name
+
+    Args:
+        model_name (_type_): BERT model name
+
+    Returns:
+        preprocessor url, encoder url
+    """    
+    return model_dict[model_name][0] , model_dict[model_name][1]
 
 
 # optional
 def parse_args():
+    """
+    Helps to initialise model hyperparameters
+
+    Returns:
+        collection of default model configuration(hyperparameters) or runtime arguments passed   
+    """    
     default_cfg.preprocessor , default_cfg.encoder = set_model_url(default_cfg.arch)
     "Overriding default argments"
     argparser = argparse.ArgumentParser(description='Process hyper-parameters')
@@ -54,6 +68,15 @@ def parse_args():
     return argparser.parse_args()
 
 def prepare_data(processed_data_at):
+    """
+     To download preprocessed latest data from W&B anf read csv file
+
+    Args:
+        processed_data_at (str): Artifact path in W&B
+
+    Returns:
+        pandas dataframe: train_set, validation_set, test_set
+    """    
 
     split = wandb.use_artifact(f'{processed_data_at}:latest')
     split_dir = split.download()
@@ -65,6 +88,18 @@ def prepare_data(processed_data_at):
     return train_df,valid_df,test_df
 
 def load_data(train,valid,test,batchsize):
+    """
+    Loading and batching the data by using tf.data
+
+    Args:
+        train (pandas dataframe): training set data
+        valid (pandas dataframe): validation set data
+        test (pandas dataframe): test set data
+        batchsize (number): number of batches to split the data
+
+    Returns:
+        tf.data.dataset: Return tensorflow datasets of train, validation and test sets
+    """    
     AUTOTUNE = tf.data.AUTOTUNE
 
     train_ds = tf.data.Dataset.from_tensor_slices((train['text'],train['label'])).batch(batchsize).prefetch(buffer_size=AUTOTUNE)
@@ -75,6 +110,14 @@ def load_data(train,valid,test,batchsize):
 
 
 def make_model(config):
+    """ Creating model by preprocessor and encoder URL 
+
+    Args:
+        config (argparser): collection of model configuration(hyperparameters)
+
+    Returns:
+        tf.keras.Model: returns model to train
+    """    
     text_input = tf.keras.Input(shape=(),dtype=tf.string,name="text")
     preprocessor = hub.KerasLayer(config.preprocessor,name=f"{config.arch}_preprocessor")
     encoder_inputs = preprocessor(text_input)
@@ -89,7 +132,12 @@ def make_model(config):
 
 
 def build_train(cfg):
-    with  wandb.init(project=cfg.PROJECT_NAME,job_type=cfg.JOB_TYPE,entity=cfg.ENTITY,config=cfg):
+    """
+    Training and monitoring model logs using W&B
+    Args:
+        cfg (argparser): collection of model configuration(hyperparameters)
+    """    
+    with wandb.init(project=cfg.PROJECT_NAME,job_type=cfg.JOB_TYPE,entity=cfg.ENTITY,config=cfg):
         train_df, valid_df, test_df = prepare_data(cfg.SPLIT_DATA)
         train_ds, valid_ds, test_ds = load_data(train_df,valid_df,test_df,cfg.bs)
 
@@ -132,18 +180,50 @@ def build_train(cfg):
         wandb.log({'test_loss': loss ,"test_accuracy": acccuracy})
 
 def predictions_table(preds,testset):
+    """Creating predictions table and to visualize data in W&B
+
+    Args:
+        preds (list): predictions by model
+        testset (pandas dataframe): test set
+
+    Returns:
+        pandas dataframe: returns predictions with their probability
+    """
+
     testset['label_prob'] = [x[testset.loc[index,'label']] for index,x in enumerate(preds)]
+    with open('class_names.txt') as file:
+        content = file.readlines()
+        content = [x.replace('\n','') for x in content]
+    testset['exp_class'] = [content[x] for x in testset['label']]
+   
     testset['target_prob'] = tf.reduce_max(preds,1)
     testset['target_class'] = tf.argmax(preds,1)
-
+    testset['predict_class'] = [content[x] for x in testset['target_class']]
+    
+    del content
     return testset
 
 def cls_report(target,preds):
-    cls = classification_report(target['label'], tf.argmax(preds,1),output_dict=True)
-    df = pd.DataFrame(cls).transpose()
-    return df[:77]  # removing last 3 rows accuracy, macro avg, weighted avg
-    
+    """
+    Creating classification report for the model predictions
 
+    Args:
+        target (list): Expected class
+        preds (pandas dataframe): test set
+
+    Returns:
+        pandas dataframe: Classification report
+    """    
+    with open('class_names.txt') as file:
+        content = file.readlines()
+        content = [x.replace('\n','') for x in content]
+    cls = classification_report(target['label'], tf.argmax(preds,1),output_dict=True,target_names=content)
+    df = pd.DataFrame(cls).transpose()[:77]  # removing last 3 rows accuracy, macro avg, weighted avg
+    df.reset_index(inplace=True)
+    
+    del content
+    return df  
+    
 
 if __name__ == "__main__":
     default_cfg.update(vars(parse_args()))
