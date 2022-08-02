@@ -1,4 +1,3 @@
-
 # Queries Classifier
 
 In this project we are going to classify customer queries based on their intentions. To get the data please use below link [here](#https://huggingface.co/datasets/banking77).
